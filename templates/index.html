@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tradutor Ren'Py</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            width: 90%;
+            max-width: 500px;
+        }
+        h1 {
+            text-align: center;
+            color: #bb86fc;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        input[type="text"], input[type="password"], input[type="file"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #333;
+            border-radius: 4px;
+            background-color: #2c2c2c;
+            color: #e0e0e0;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 0.75rem;
+            border: none;
+            border-radius: 4px;
+            background-color: #bb86fc;
+            color: #121212;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #a362f7;
+        }
+        .progress-section {
+            margin-top: 2rem;
+            display: none;
+        }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 20px;
+            background-color: #03dac6;
+            text-align: center;
+            line-height: 20px;
+            color: #121212;
+            transition: width 0.4s;
+        }
+        #status-message {
+            margin-top: 1rem;
+            text-align: center;
+            min-height: 20px;
+        }
+        #download-link {
+            display: none;
+            text-align: center;
+            margin-top: 1.5rem;
+        }
+        #download-link a {
+            color: #03dac6;
+            text-decoration: none;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tradutor de Visual Novel Ren'Py</h1>
+        <form id="translation-form">
+            <div class="form-group">
+                <label for="api-key">Chave da API Gemini</label>
+                <input type="password" id="api-key" name="api_key" required>
+            </div>
+            <div class="form-group">
+                <label for="game-zip">Arquivo .zip do Jogo</label>
+                <input type="file" id="game-zip" name="game_zip" accept=".zip" required>
+            </div>
+            <div class="form-group">
+                <label for="folder-name">Nome da Pasta de Tradução</label>
+                <input type="text" id="folder-name" name="folder_name" value="ptbyshw" required>
+            </div>
+            <button type="submit">Traduzir</button>
+        </form>
+        <div class="progress-section">
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar">0%</div>
+            </div>
+            <p id="status-message">Iniciando...</p>
+        </div>
+        <div id="download-link">
+            <a href="#" id="download-anchor">Download da Tradução</a>
+        </div>
+    </div>
+    <script>
+        document.getElementById('translation-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const formData = new FormData(form);
+
+            const progressSection = document.querySelector('.progress-section');
+            const progressBar = document.getElementById('progress-bar');
+            const statusMessage = document.getElementById('status-message');
+            const downloadLink = document.getElementById('download-link');
+            const downloadAnchor = document.getElementById('download-anchor');
+
+            progressSection.style.display = 'block';
+            downloadLink.style.display = 'none';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            statusMessage.textContent = 'Enviando arquivo...';
+
+            try {
+                // For now, let's simulate the progress while the file is being uploaded and processed.
+                // In the future, this will be driven by real progress updates from the server.
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 5;
+                    if (progress > 95) {
+                        clearInterval(interval);
+                    }
+                    progressBar.style.width = progress + '%';
+                    progressBar.textContent = progress + '%';
+                }, 500);
+
+                statusMessage.textContent = 'Processando e traduzindo... Isso pode levar vários minutos.';
+
+                const response = await fetch('/translate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                clearInterval(interval);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Ocorreu um erro no servidor.');
+                }
+
+                const result = await response.json();
+
+                progressBar.style.width = '100%';
+                progressBar.textContent = '100%';
+                statusMessage.textContent = 'Tradução concluída!';
+
+                downloadAnchor.href = result.download_url;
+                downloadLink.style.display = 'block';
+
+            } catch (error) {
+                statusMessage.textContent = `Erro: ${error.message}`;
+                progressBar.style.backgroundColor = '#cf6679'; // Error color
+            }
+        });
+    </script>
+</body>
+</html>
