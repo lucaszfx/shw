@@ -134,52 +134,73 @@
             const statusMessage = document.getElementById('status-message');
             const downloadLink = document.getElementById('download-link');
             const downloadAnchor = document.getElementById('download-anchor');
+            const submitButton = form.querySelector('button');
 
+            // Reset UI
             progressSection.style.display = 'block';
             downloadLink.style.display = 'none';
             progressBar.style.width = '0%';
             progressBar.textContent = '0%';
+            progressBar.style.backgroundColor = '#03dac6';
             statusMessage.textContent = 'Enviando arquivo...';
+            submitButton.disabled = true;
+            submitButton.style.backgroundColor = '#555';
 
             try {
-                // For now, let's simulate the progress while the file is being uploaded and processed.
-                // In the future, this will be driven by real progress updates from the server.
-                let progress = 0;
-                const interval = setInterval(() => {
-                    progress += 5;
-                    if (progress > 95) {
-                        clearInterval(interval);
-                    }
-                    progressBar.style.width = progress + '%';
-                    progressBar.textContent = progress + '%';
-                }, 500);
-
-                statusMessage.textContent = 'Processando e traduzindo... Isso pode levar vários minutos.';
-
                 const response = await fetch('/translate', {
                     method: 'POST',
                     body: formData
                 });
 
-                clearInterval(interval);
-
                 if (!response.ok) {
                     const errorData = await response.json();
-                    throw new Error(errorData.error || 'Ocorreu um erro no servidor.');
+                    throw new Error(errorData.error || 'Ocorreu um erro ao iniciar a tarefa.');
                 }
 
                 const result = await response.json();
+                const jobId = result.job_id;
 
-                progressBar.style.width = '100%';
-                progressBar.textContent = '100%';
-                statusMessage.textContent = 'Tradução concluída!';
+                if (!jobId) {
+                    throw new Error('Não foi possível obter o ID da tarefa de tradução.');
+                }
 
-                downloadAnchor.href = result.download_url;
-                downloadLink.style.display = 'block';
+                // Connect to the progress stream
+                const eventSource = new EventSource(`/progress/${jobId}`);
+
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+
+                    progressBar.style.width = data.progress + '%';
+                    progressBar.textContent = data.progress + '%';
+                    statusMessage.textContent = data.message;
+
+                    if (data.status === 'complete') {
+                        downloadAnchor.href = data.download_url;
+                        downloadLink.style.display = 'block';
+                        eventSource.close();
+                        submitButton.disabled = false;
+                        submitButton.style.backgroundColor = '#bb86fc';
+                    } else if (data.status === 'error') {
+                        progressBar.style.backgroundColor = '#cf6679'; // Error color
+                        eventSource.close();
+                        submitButton.disabled = false;
+                        submitButton.style.backgroundColor = '#bb86fc';
+                    }
+                };
+
+                eventSource.onerror = function() {
+                    statusMessage.textContent = 'Erro de conexão com o servidor. A conexão foi perdida.';
+                    progressBar.style.backgroundColor = '#cf6679';
+                    eventSource.close();
+                    submitButton.disabled = false;
+                    submitButton.style.backgroundColor = '#bb86fc';
+                };
 
             } catch (error) {
                 statusMessage.textContent = `Erro: ${error.message}`;
-                progressBar.style.backgroundColor = '#cf6679'; // Error color
+                progressBar.style.backgroundColor = '#cf6679';
+                submitButton.disabled = false;
+                submitButton.style.backgroundColor = '#bb86fc';
             }
         });
     </script>

@@ -1,7 +1,9 @@
 import os
 import re
 import hashlib
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import time
+import threading
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 import zipfile
 import requests
 import json
@@ -18,9 +20,80 @@ app.config['TRANSLATED_FOLDER'] = TRANSLATED_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(TRANSLATED_FOLDER, exist_ok=True)
 
+# In-memory dictionary to store job progress
+progress_updates = {}
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+def run_translation_job(job_id, upload_path, api_key, folder_name):
+    """This function runs in a background thread to process the translation."""
+    try:
+        # 1. Unzip the file
+        progress_updates[job_id] = {"progress": 5, "message": "Descompactando arquivo do jogo..."}
+        extraction_path = os.path.join(app.config['TRANSLATED_FOLDER'], job_id, 'source')
+        os.makedirs(extraction_path, exist_ok=True)
+
+        with zipfile.ZipFile(upload_path, 'r') as zip_ref:
+            zip_ref.extractall(extraction_path)
+
+        # 2. Find .rpy files
+        progress_updates[job_id] = {"progress": 10, "message": "Procurando arquivos de script (.rpy)..."}
+        rpy_files = []
+        for root, _, files in os.walk(extraction_path):
+            for filename in files:
+                if filename.endswith('.rpy'):
+                    rpy_files.append(os.path.join(root, filename))
+        if not rpy_files:
+            raise ValueError("Nenhum arquivo .rpy encontrado no zip")
+
+        # 3. Extract strings
+        progress_updates[job_id] = {"progress": 15, "message": "Extraindo textos dos arquivos..."}
+        all_strings = set()
+        for rpy_file in rpy_files:
+            all_strings.update(extract_strings_from_rpy(rpy_file))
+        if not all_strings:
+            raise ValueError("Nenhum texto traduzível encontrado nos arquivos .rpy")
+
+        # 4. Classify with AI
+        classified_strings = classify_strings_with_ai(list(all_strings), api_key, job_id)
+
+        # 5. Translate with AI
+        translated_strings = translate_strings_with_ai(classified_strings, api_key, job_id)
+
+        # 6. Generate final files
+        progress_updates[job_id] = {"progress": 90, "message": "Gerando arquivos de tradução finais..."}
+        output_zip_name = f"translated_{job_id}.zip"
+        result_zip_path = os.path.join(app.config['TRANSLATED_FOLDER'], output_zip_name)
+        result_dir = os.path.join(app.config['TRANSLATED_FOLDER'], job_id, 'result')
+        final_translation_dir = os.path.join(result_dir, 'tl', folder_name)
+        os.makedirs(final_translation_dir, exist_ok=True)
+
+        generate_translation_files(translated_strings, final_translation_dir, folder_name)
+
+        # 7. Zip the result
+        progress_updates[job_id] = {"progress": 95, "message": "Compactando o resultado final..."}
+        with zipfile.ZipFile(result_zip_path, 'w') as zipf:
+             for root, _, files in os.walk(result_dir):
+                for f in files:
+                    zipf.write(os.path.join(root, f), os.path.relpath(os.path.join(root, f), result_dir))
+
+        # 8. Finish
+        progress_updates[job_id] = {
+            "progress": 100,
+            "message": "Tradução concluída!",
+            "status": "complete",
+            "download_url": f'/download/{output_zip_name}'
+        }
+
+    except Exception as e:
+        # Handle errors
+        progress_updates[job_id] = {
+            "progress": 100,
+            "message": f"Erro: {str(e)}",
+            "status": "error"
+        }
 
 @app.route('/translate', methods=['POST'])
 def translate():
@@ -31,82 +104,22 @@ def translate():
     api_key = request.form.get('api_key')
     folder_name = request.form.get('folder_name', 'ptbyshw')
 
-    if file.filename == '':
-        return jsonify({'error': 'Nenhum arquivo selecionado'}), 400
-
-    if not api_key:
-        return jsonify({'error': 'Chave da API não fornecida'}), 400
+    if file.filename == '' or not api_key:
+        return jsonify({'error': 'Todos os campos são obrigatórios'}), 400
 
     if file and file.filename.endswith('.zip'):
-        # Create a unique directory for this translation job
-        import time
-        import uuid
-        job_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        job_id = f"{int(time.time())}"
 
+        # Save the file immediately to a temporary path
         upload_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}.zip")
-        extraction_path = os.path.join(app.config['TRANSLATED_FOLDER'], job_id, 'source')
-
-        os.makedirs(extraction_path, exist_ok=True)
         file.save(upload_path)
 
-        # Unzip the file
-        try:
-            with zipfile.ZipFile(upload_path, 'r') as zip_ref:
-                zip_ref.extractall(extraction_path)
-        except zipfile.BadZipFile:
-            return jsonify({'error': 'Arquivo zip inválido ou corrompido'}), 400
+        # Start the background thread, passing the file *path* instead of the object
+        thread = threading.Thread(target=run_translation_job, args=(job_id, upload_path, api_key, folder_name))
+        thread.start()
 
-        # Find all .rpy files recursively
-        rpy_files = []
-        for root, _, files in os.walk(extraction_path):
-            for filename in files:
-                if filename.endswith('.rpy'):
-                    rpy_files.append(os.path.join(root, filename))
-
-        if not rpy_files:
-            return jsonify({'error': 'Nenhum arquivo .rpy encontrado no zip'}), 400
-
-        # Step 4: Extract and Classify Text with AI
-        all_strings = set()
-        for rpy_file in rpy_files:
-            all_strings.update(extract_strings_from_rpy(rpy_file))
-
-        if not all_strings:
-            return jsonify({'error': 'Nenhum texto traduzível encontrado nos arquivos .rpy'}), 400
-
-        try:
-            classified_strings = classify_strings_with_ai(list(all_strings), api_key)
-            print(f"Successfully classified {len(classified_strings)} strings.")
-
-            # Step 5: Translate with AI
-            translated_strings = translate_strings_with_ai(classified_strings, api_key)
-            print(f"Successfully translated {len([s for s in translated_strings if 'translated' in s])} strings.")
-
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
-        # Placeholder for the next step (File Generation)
-        output_zip_name = f"translated_{job_id}.zip"
-        result_zip_path = os.path.join(app.config['TRANSLATED_FOLDER'], output_zip_name)
-
-        result_dir = os.path.join(app.config['TRANSLATED_FOLDER'], job_id, 'result')
-        final_translation_dir = os.path.join(result_dir, 'tl', folder_name)
-        os.makedirs(final_translation_dir, exist_ok=True)
-
-        # Step 6: Generate Translation Files
-        try:
-            # The 'folder_name' from the user becomes the language identifier for Ren'Py
-            generate_translation_files(translated_strings, final_translation_dir, folder_name)
-            print("Successfully generated translation files.")
-        except Exception as e:
-            return jsonify({'error': f"Erro ao gerar arquivos de tradução: {e}"}), 500
-
-        with zipfile.ZipFile(result_zip_path, 'w') as zipf:
-             for root, _, files in os.walk(result_dir):
-                for f in files:
-                    zipf.write(os.path.join(root, f), os.path.relpath(os.path.join(root, f), result_dir))
-
-        return jsonify({'download_url': f'/download/{output_zip_name}'})
+        # Immediately return the job_id so the frontend can start polling for progress
+        return jsonify({'job_id': job_id})
 
     return jsonify({'error': 'Formato de arquivo inválido. Por favor, envie um .zip'}), 400
 
@@ -124,15 +137,22 @@ def extract_strings_from_rpy(file_path):
         print(f"Warning: Could not read file {file_path}. Skipping. Reason: {e}")
         return set()
 
-def classify_strings_with_ai(strings, api_key):
+def classify_strings_with_ai(strings, api_key, job_id):
     """Uses Gemini AI to classify strings as dialogue, UI, formatted, or code."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
 
     # Batch strings to avoid hitting API limits
     batch_size = 100
     all_classified_strings = []
+    total_batches = (len(strings) + batch_size - 1) // batch_size
 
     for i in range(0, len(strings), batch_size):
+        current_batch_num = (i // batch_size) + 1
+        progress = 25 + int((current_batch_num / total_batches) * 30) # Progress from 25% to 55%
+        progress_updates[job_id] = {
+            "progress": progress,
+            "message": f"Classificando textos com IA (lote {current_batch_num} de {total_batches})..."
+        }
         batch = strings[i:i + batch_size]
 
         prompt = """
@@ -197,7 +217,7 @@ def classify_strings_with_ai(strings, api_key):
 
     return all_classified_strings
 
-def translate_strings_with_ai(classified_strings, api_key):
+def translate_strings_with_ai(classified_strings, api_key, job_id):
     """Uses Gemini AI to translate the classified strings."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
 
@@ -210,8 +230,15 @@ def translate_strings_with_ai(classified_strings, api_key):
     # Batch strings for translation
     batch_size = 50 # Smaller batch for translation to ensure prompt quality
     all_translated_strings = {}
+    total_batches = (len(translatable_items) + batch_size - 1) // batch_size
 
     for i in range(0, len(translatable_items), batch_size):
+        current_batch_num = (i // batch_size) + 1
+        progress = 55 + int((current_batch_num / total_batches) * 35) # Progress from 55% to 90%
+        progress_updates[job_id] = {
+            "progress": progress,
+            "message": f"Traduzindo textos com IA (lote {current_batch_num} de {total_batches})..."
+        }
         batch = translatable_items[i:i + batch_size]
 
         # Prepare a list of strings and their context (proper nouns) for the prompt
@@ -323,6 +350,19 @@ def generate_translation_files(translated_strings, output_dir, language_identifi
     except FileNotFoundError:
         print("Warning: replaceText.txt not found. This file will be skipped.")
 
+
+@app.route('/progress/<job_id>')
+def progress(job_id):
+    def generate():
+        while True:
+            if job_id in progress_updates:
+                data = progress_updates[job_id]
+                yield f"data: {json.dumps(data)}\n\n"
+                if data.get("status") == "complete" or data.get("status") == "error":
+                    del progress_updates[job_id]
+                    break
+            time.sleep(1)
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
