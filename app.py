@@ -126,7 +126,7 @@ def extract_strings_from_rpy(file_path):
 
 def classify_strings_with_ai(strings, api_key):
     """Uses Gemini AI to classify strings as dialogue, UI, formatted, or code."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
 
     # Batch strings to avoid hitting API limits
     batch_size = 100
@@ -199,7 +199,7 @@ def classify_strings_with_ai(strings, api_key):
 
 def translate_strings_with_ai(classified_strings, api_key):
     """Uses Gemini AI to translate the classified strings."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro-latest:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={api_key}"
 
     # Filter for translatable strings
     translatable_items = [item for item in classified_strings if item.get('is_translatable')]
